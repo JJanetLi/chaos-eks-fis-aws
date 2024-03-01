@@ -1,5 +1,5 @@
 common:
-  db_uri: 'postgresql://postgres:rds!db-fbf8a6c1-ba4f-4809-90f5-e082404d96a7@chaos-cluster-rds.cf37ypvoauta.ap-southeast-2.rds.amazonaws.com:5432/postgres'
+  db_uri: 'postgresql://postgres:]o1(GlJ<7ZyunzPEaXyO{sqLYx6-@chaos-cluster-rds.cf37ypvoauta.ap-southeast-2.rds.amazonaws.com:5432/postgres'
   redis_host: 'redis-cache.ecommerce-app.svc.cluster.local'
   redis_port: '6379'
   cart_service_url: 'cart-service.ecommerce-app.svc.cluster.local'
