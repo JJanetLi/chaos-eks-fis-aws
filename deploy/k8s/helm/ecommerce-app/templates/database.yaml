@@ -1,0 +1,128 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  labels:
+    app: postgres
+  namespace: likes-web-app
+data:
+  POSTGRES_PASSWORD: rds!db-fbf8a6c1-ba4f-4809-90f5-e082404d96a7  ## todo --> refer from the AWS Secrets Manager
+  POSTGRES_USER: postgres
+  POSTGRES_DB: postgres
+  init: |
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    CREATE TABLE products (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(255),
+        description TEXT,
+        price DECIMAL(10, 2)
+    );
+
+    CREATE TABLE orders (
+        id UUID PRIMARY KEY,
+        created_on TIMESTAMP,
+        customer_id VARCHAR(255),
+        total_amount DECIMAL(10, 2)
+    );
+
+    INSERT INTO products (name, description, price)
+    VALUES ('Product 1', 'Description for Product 1', 9.99, ''),
+          ('Product 2', 'Description for Product 2', 19.99, ''),
+          ('Product 3', 'Description for Product 3', 30, '');
+---
+kind: PersistentVolume
+apiVersion: v1
+metadata:
+  name: postgres-pv-volume
+  labels:
+    type: local
+    app: postgres
+  namespace: likes-web-app
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  hostPath:
+    path: "/mnt/data"
+---
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: postgres-pv-claim
+  labels:
+    app: postgres
+  namespace: likes-web-app
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: likes-web-app
+spec:
+  replicas: 1
+  serviceName: postgres
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: postgres
+          image: postgres:14.7
+          imagePullPolicy: "IfNotPresent"
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgredb
+            - mountPath: /docker-entrypoint-initdb.d
+              name: init
+          # resources:
+          #   requests:
+          #     memory: "64Mi"
+          #     cpu: "250m"
+          #   limits:
+          #     memory: "128Mi"
+          #     cpu: "500m"
+      volumes:
+        - name: postgredb
+          persistentVolumeClaim:
+            claimName: postgres-pv-claim
+        - name: init
+          configMap:
+            name: postgres-config
+            items:
+            - key: init
+              path: init.sql
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+  namespace: likes-web-app
+spec:
+  type: ClusterIP
+  ports:
+   - port: 5432
+  selector:
+   app: postgres

@@ -1,0 +1,41 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: catalog-service-network-chaos
+  namespace: ecommerce-app
+spec: 
+  # It can be active/stop
+  engineState: 'active'
+  appinfo: 
+    appns: 'ecommerce-app'
+    # FYI, To see app label, apply kubectl get pods --show-labels
+    applabel: 'app=catalog-service'
+    appkind: 'deployment'
+  chaosServiceAccount: pod-network-latency-sa
+  experiments:
+    - name: pod-network-latency
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: '90' # in seconds
+
+            - name: NETWORK_LATENCY
+              value: '1500'
+
+            - name: JITTER
+              value: '0'            
+
+            # provide the name of container runtime
+            # for litmus LIB, it supports docker, containerd, crio
+            # for pumba LIB, it supports docker only
+            - name: CONTAINER_RUNTIME
+              value: 'containerd'
+
+            # provide the socket file path
+            - name: SOCKET_PATH
+              value: '/run/containerd/containerd.sock'
+
+             ## percentage of total pods to target
+            - name: PODS_AFFECTED_PERC
+              value: '100'

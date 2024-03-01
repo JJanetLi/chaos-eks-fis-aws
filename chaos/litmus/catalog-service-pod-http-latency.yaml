@@ -1,0 +1,41 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: catalog-service-pod-http-chaos
+  namespace: ecommerce-app
+spec: 
+  # It can be active/stop
+  engineState: 'active'
+  appinfo: 
+    appns: 'ecommerce-app'
+    # FYI, To see app label, apply kubectl get pods --show-labels
+    applabel: 'app=catalog-service'
+    appkind: 'deployment'
+  chaosServiceAccount: pod-http-latency-sa
+  experiments:
+    - name: pod-http-latency
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: '90' # in seconds
+            
+            - name: LATENCY
+              value: '1500' #in ms
+
+            # port of the target service
+            - name: TARGET_SERVICE_PORT
+              value: "8000"
+
+            # provide the name of container runtime
+            # it supports docker, containerd, crio
+            - name: CONTAINER_RUNTIME
+              value: 'containerd'
+
+            # provide the socket file path
+            - name: SOCKET_PATH
+              value: '/run/containerd/containerd.sock'
+
+             ## percentage of total pods to target
+            - name: PODS_AFFECTED_PERC
+              value: '100'

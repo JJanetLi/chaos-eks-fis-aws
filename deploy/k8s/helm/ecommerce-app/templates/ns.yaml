@@ -1,0 +1,8 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ecommerce-app
+  # disabling due to istio proxy causing issues with new pods that talks to k8s api server
+  # labels:
+  #   istio-injection: enabled

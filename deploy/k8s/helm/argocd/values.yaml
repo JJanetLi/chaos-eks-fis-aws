@@ -1,0 +1,14 @@
+destinationServer: ''
+argoNamespace: ''
+argoProject: ''
+
+spec:
+  destination:
+    server: https://kubernetes.default.svc
+  source:
+    repoURL: https://amazon-eks-chaos-demo-codecommit-at-640480128198:+dz/0EYH5rHlx/hb5t2jooEbA7krPMG/VYckXoHdP/o=@git-codecommit.ap-southeast-2.amazonaws.com/v1/repos/chaos_gitops_repository
+    targetRevision: main
+
+  # Thoses default values can be surcharged by Infrastructure as Code
+  clusterName: chaos-cluster # the name of EKS cluster
+  blueprint: 'terraform' # cdk | terraform

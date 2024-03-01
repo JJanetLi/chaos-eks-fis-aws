@@ -1,0 +1,95 @@
+# © 2023 Amazon Web Services, Inc. or its affiliates. All Rights Reserved.  
+# This AWS Content is provided subject to the terms of the AWS Customer Agreement available at  
+# http://aws.amazon.com/agreement or other written agreement between Customer and either
+# Amazon Web Services, Inc. or Amazon Web Services EMEA SARL or both.
+
+version: "2"
+name: amazon-eks-chaos-demo
+services:
+ 
+  catalog-service:
+    container_name: catalog-service
+    hostname: catalog-service
+    image: ghcr.io/farhanangullia/ecommerce-app/catalog-service:v1.0.0
+    restart: unless-stopped
+    ports:
+      - "5000:8000"
+    environment:
+      - DB_URI=postgresql://postgres:postgres@postgres:5432/postgres 
+    depends_on:
+      - postgres
+    networks:
+      - local-net
+
+  cart-service:
+    container_name: cart-service
+    hostname: cart-service
+    image: ghcr.io/farhanangullia/ecommerce-app/cart-service:v1.0.0
+    restart: unless-stopped
+    ports:
+      - "6000:8000"
+    environment:
+      - REDIS_HOST=redis-server
+      - REDIS_PORT=6379
+    depends_on:
+      - postgres
+      - redis-server
+    networks:
+      - local-net
+
+
+  order-service:
+    container_name: order-service
+    hostname: order-service
+    image: ghcr.io/farhanangullia/ecommerce-app/order-service:v1.0.0
+    restart: unless-stopped
+    ports:
+      - "9000:8000"
+    environment:
+      - DB_URI=postgresql://postgres:postgres@postgres:5432/postgres
+      - CART_SERVICE_URL=cart-service:8000
+      - PRODUCT_SERVICE_URL=catalog-service:8000
+    depends_on:
+      - postgres
+      - catalog-service
+      - cart-service
+    networks:
+      - local-net
+
+  postgres:
+    container_name: postgres
+    hostname: postgres
+    image: postgres:14.7
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./src/db/create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql
+      - ./src/db/fill_tables.sql:/docker-entrypoint-initdb.d/fill_tables.sql
+    networks:
+      - local-net
+
+  redis-server:
+    container_name: redis-server
+    image: redis:7.0.10
+    networks:
+      - local-net
+
+  pgweb:
+    container_name: pgweb
+    restart: unless-stopped
+    image: sosedoff/pgweb
+    ports: 
+      - "8081:8081" 
+    networks:
+      - local-net
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+    depends_on:
+      - postgres
+
+networks:
+  local-net:
