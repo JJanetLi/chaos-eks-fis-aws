@@ -1027,7 +1027,7 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: 
+  name: ui
   labels:
     helm.sh/chart: -0.0.1
     app.kubernetes.io/name: ui
