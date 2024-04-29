@@ -1029,7 +1029,7 @@ kind: ServiceAccount
 metadata:
   name: ui
   labels:
-    helm.sh/chart: -0.0.1
+    helm.sh/chart: ui-0.0.1
     app.kubernetes.io/name: ui
     app.kubernetes.io/instance: ui
     app.kubernetes.io/component: service
