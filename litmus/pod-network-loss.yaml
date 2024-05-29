@@ -6,6 +6,7 @@ description:
 kind: ChaosExperiment
 metadata:
   name: pod-network-loss
+  namespace: app
   labels:
     name: pod-network-loss
     app.kubernetes.io/part-of: litmus
