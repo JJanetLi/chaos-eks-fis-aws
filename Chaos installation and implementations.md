@@ -8,7 +8,7 @@
 kubectl create ns app 
 kubectl apply -f https://github.com/JJanetLi/chaos-eks-fis-aws/blob/app/app/retail-store-sample-app.yaml -n app
 ```
-
+**Note - replace xxxxxx to your own AWS account number**
 # Chaos Mesh 
 
 ## Installation 
@@ -153,41 +153,136 @@ Verified installation with below command and expected output
 kubectl get pods -n litmus  | grep ope
 chaos-operator-ce-5577475cf5-rbzzh          1/1     Running   0          21s
 ```
+# AWS Fault injection Service (FIS)
 
-## Litmus chaos experiment 
+Use FIS to inject Chaos Mesh and Litmus chaos by action - aws:eks:inject-kubernetes-custom-resource
 
-Pod network loss is chosen for litmus chaos injection, pod network loss chaos injects packet loss by starting a traffic control (tc) process with netem rules to add egress loss , it can test the application's resilience to lossy/flaky network. 
+## Step 1 - Create FIS role 
 
-Step1: Deploy the pod-network-loss experiment resource in the designed namespace 
+The permissions required to use this action are controlled by Kubernetes using RBAC authorization.  Hence, you will need to create a FIS role and mapped into EKS access entry for RBAC permission. 
+
+#### Step1-1: Create a trust relationship from below with name fis-role-trust-policy.json 
 
 ```
-kubectl apply -f 'https://hub.litmuschaos.io/api/chaos/master?file=faults/kubernetes/pod-network-loss/fault.yaml' -n app 
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                  "fis.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+}
+```
+
+####  Step1-2: Create fis role with above trust relationship
+```
+aws iam create-role --role-name fis-role --assume-role-policy-document file://fis-role-trust-policy.json 
 ```
 
 Expected outcome: 
-```
-chaosexperiment.litmuschaos.io/pod-network-loss created
-```
-Step 2: Deploy required permissions (RBAC) for above chaos injection 
 
-Save below file as pod-network-loss-rbac.yaml, make sure to replace the namespace value to the destinated namespace where pods deployed 
 ```
+{
+    "Role": {
+        "Path": "/",
+        "RoleName": "fis-role",
+        ...
+        "Arn": "arn:aws:iam::account:role/fis-role",
+        ...
+```
+## Step2 (Optional) - Create CloudWatch Log group for fault injection experiment logs
+
+#### Step 2-1: Create cloudwatch log group: 
+
+```
+aws logs create-log-group --log-group-name fis-chaos --region us-east-1 
+```
+
+#### Step 2-2: Enable fis-role for cloudwatch related permissions, Create  below policy named fis-log.json
+```
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "CloudWatchLogsFullAccess",
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogDelivery",
+                "logs:PutResourcePolicy",
+                "logs:DescribeResourcePolicies",
+                "logs:DescribeLogGroups"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+```
+aws iam create-policy --policy-name fis-log --policy-document file://fis-log.json --profile chaos
+```
+
+```
+aws iam attach-role-policy --policy-arn arn:aws:iam::640480128198:policy/fis-log --role-name fis-role  --profile chaos
+```
+
+## Step 3 - Grant  FIS role EKS RBAC access
+
+Create Access entry for fis-role: 
+```
+aws eks create-access-entry --cluster-name chaos-cluster --principal-arn arn:aws:iam::xxxxxx:role/fis-role --type STANDARD --username fis  --region us-east-1
+```
+
+Grant fis-role cluster admin access: 
+```
+aws eks associate-access-policy --cluster-name chaos-cluster  --principal-arn arn:aws:iam::xxxxxx:role/fis-role --access-scope type=cluster --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy --region us-east-1
+```
+## Step 4 - Create FIS experiment template - Litmus Chaos 
+
+Litmus chaos experiment of injecting http reset peer chaos will be pushed to application pod via AWS FIS. 
+
+http reset peer chaos experiment injects http reset on the service whose port is provided as TARGET_SERVICE_PORT which stops outgoing http requests by resetting the TCP connection by starting proxy server and then redirecting the traffic through the proxy server. It can test the application's resilience to lossy/flaky http connection.
+
+#### Step 4.1 - Install pod-http-reset-peer experiment resource in the namespace where application is deployed.
+
+Use below command 
+```
+kubectl apply -f "https://hub.litmuschaos.io/api/chaos/master?file=faults/kubernetes/pod-http-reset-peer/fault.yaml" -n app
+```
+Verify the installation 
+```
+kubectl get chaosexperiments -n app | grep http
+pod-http-reset-peer   6s
+```
+
+#### Step 4.2 - Grant pod-http-reset-peer chaos minimal RBAC permission
+
+Please copy below content and save as pod-http-reset-peer-rbac.yaml, change the namespace to the namespace where application is deployed: 
+
+```
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: pod-network-loss-sa
+  name: pod-http-reset-peer-sa
   namespace: app
   labels:
-    name: pod-network-loss-sa
+    name: pod-http-reset-peer-sa
     app.kubernetes.io/part-of: litmus
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: pod-network-loss-sa
+  name: pod-http-reset-peer-sa
   namespace: app
   labels:
-    name: pod-network-loss-sa
+    name: pod-http-reset-peer-sa
     app.kubernetes.io/part-of: litmus
 rules:
   # Create and monitor the experiment & helper pods
@@ -238,109 +333,155 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: pod-network-loss-sa
+  name: pod-http-reset-peer-sa
   namespace: app
   labels:
-    name: pod-network-loss-sa
+    name: pod-http-reset-peer-sa
     app.kubernetes.io/part-of: litmus
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: pod-network-loss-sa
+  name: pod-http-reset-peer-sa
 subjects:
 - kind: ServiceAccount
-  name: pod-network-loss-sa
+  name: pod-http-reset-peer-sa
   namespace: app
 ```
 
-Run below command 
+Use below command to apply 
 ```
-kubectl apply -f pod-network-loss-rbac.yaml
+kubectl apply -f pod-http-reset-peer-rbac.yaml 
+```
+
+#### Step 4.3 Create FIS experiment template 
+
+Use below command to create FIS experiment template: 
+
+```
+aws fis create-experiment-template \
+    --cli-input-json '{
+        "description": "fis-litmus-chaos",
+        "targets": {
+                "Cluster-Target-1": {
+                        "resourceType": "aws:eks:cluster",
+                        "resourceArns": [
+                                "arn:aws:eks:us-east-1:xxxxxx:cluster/chaos-cluster"
+                        ],
+                        "selectionMode": "ALL"
+                }
+        },
+        "actions": {
+                "http-reset-peer": {
+                        "actionId": "aws:eks:inject-kubernetes-custom-resource",
+                        "description": "litmus-http-reset-peer-chaos",
+                        "parameters": {
+                                "kubernetesApiVersion": "litmuschaos.io/v1alpha1",
+                                "kubernetesKind": "ChaosEngine",
+                                "kubernetesNamespace": "app",
+                                "kubernetesSpec": "{   \"engineState\": \"active\",   \"annotationCheck\": \"false\",   \"appinfo\": {     \"appns\": \"app\",     \"applabel\": \"app.kubernetes.io/name=ui\",     \"appkind\": \"deployment\"   },   \"chaosServiceAccount\": \"pod-http-reset-peer-sa\",   \"experiments\": [     {       \"name\": \"pod-http-reset-peer\",       \"spec\": {         \"components\": {           \"env\": [             {               \"name\": \"TARGET_PODS\",               \"value\": \"ui-d6bddf848-ghr4b\"             },             {               \"name\": \"TOXICITY\",               \"value\": \"100\"             },             {               \"name\": \"TARGET_SERVICE_PORT\",               \"value\": \"8080\"             }           ]         }       }     }   ] }",
+                                "maxDuration": "PT2M"
+                        },
+                        "targets": {
+                                "Cluster": "Cluster-Target-1"
+                        }
+                }
+        },
+        "stopConditions": [
+                {
+                        "source": "none"
+                }
+        ],
+        "roleArn": "arn:aws:iam::xxxxxx:role/fis-role",
+        "tags": {},
+        "logConfiguration": {
+                "cloudWatchLogsConfiguration": {
+                        "logGroupArn": "arn:aws:logs:us-east-1:xxxxxx:log-group:fis-chaos:*"
+                },
+                "logSchemaVersion": 2
+        },
+        "experimentOptions": {
+                "accountTargeting": "single-account",
+                "emptyTargetResolutionMode": "fail"
+        }
+}'
+```
+
+Record experiment template ID or query the experiment template ID 
+```
+aws fis list-experiment-templates --region us-east-1 | grep lit -B1
 ```
 
 Expected outcome 
 ```
-serviceaccount/pod-network-loss-sa created
-role.rbac.authorization.k8s.io/pod-network-loss-sa created
-rolebinding.rbac.authorization.k8s.io/pod-network-loss-sa created
+ "id": "EXT5ZByKtF4sgEL",
+ "description": "fis-litmus-chaos",
 ```
 
-Step3: Create experiment configuration into a yaml file, with name pod-network-loss.yaml
+#### Step 4.4 - Run FIS fault injections 
 
+Verify pod connection before run the FIS experiment
 
+Get ui pod IP 
 ```
-apiVersion: litmuschaos.io/v1alpha1
-kind: ChaosEngine
-metadata:
-  name: ui-network-loss
-  namespace: app 
-spec:
-  engineState: "active"
-  annotationCheck: "false"
-  appinfo:
-    appns: "app"
-    applabel: "app.kubernetes.io/name=ui"
-    appkind: "deployment"
-  chaosServiceAccount: pod-network-loss-sa
-  experiments:
-  - name: pod-network-loss
-    spec:
-      components:
-        env:
-        - name: NETWORK_PACKET_LOSS_PERCENTAGE
-          value: '100'
-        - name: TARGET_PODS
-          value: 'ui-d6bddf848-br4qt'
-        - name: TOTAL_CHAOS_DURATION
-          value: '60'
+kubectl get pod -n app -o wide | grep ui 
+ui-d6bddf848-ghr4b                1/1     Running   2 (6d ago)    10d   172.31.38.116   ip-172-31-47-5.ec2.internal   <none>           <none>
 ```
 
-Step 4 Validate chaos injection 
-
-A: Validate from pod-network-loss pod log in app namespace 
+Check HTTP response before Fault injection: 
 
 ```
-kubectl get pods -n app | grep loss 
-pod-network-loss-7dsh6a-kzmtg     0/1     Completed   0              3m29s
-ui-network-loss-runner            0/1     Completed   0              3m31s
-kubectl logs -n app -f pod-network-loss-7dsh6a-kzmtg
+curl -vk 172.31.38.116:8080
+*   Trying 172.31.38.116:8080...
+* Connected to 172.31.38.116 (172.31.38.116) port 8080
+> GET / HTTP/1.1
+> Host: 172.31.38.116:8080
+> User-Agent: curl/8.7.1
+> Accept: */*
+> 
+< HTTP/1.1 303 See Other
+< Location: /home
+< set-cookie: SESSIONID=3a7627e9-fd94-4535-be6d-80cf08f0cdb5
+< content-length: 0
+< 
+* Request completely sent off
+* Connection #0 to host 172.31.38.116 left intact
 ```
 
-Expected outcome: 
-
+Run experiment: 
 ```
-time="2024-06-19T10:55:51Z" level=info msg="Experiment Name: pod-network-loss"
-time="2024-06-19T10:55:51Z" level=info msg="[PreReq]: Getting the ENV for the pod-network-loss experiment"
-time="2024-06-19T10:55:53Z" level=info msg="[PreReq]: Updating the chaos result of pod-network-loss experiment (SOT)"
-time="2024-06-19T10:55:57Z" level=info msg="The application information is as follows\n" Loss Percentage=100 Targets= Target Container= Chaos Duration=60 Container Runtime=containerd
-time="2024-06-19T10:55:57Z" level=info msg="[Info]: The chaos tunables are:" PodsAffectedPerc=0 NetworkPacketLossPercentage=100 Sequence=parallel
-time="2024-06-19T10:55:57Z" level=info msg="[Chaos]:Number of pods targeted: 1"
-time="2024-06-19T10:55:57Z" level=info msg="Target pods list for chaos, [ui-d6bddf848-br4qt]"
-time="2024-06-19T10:55:57Z" level=info msg="[Status]: Checking the status of the helper pods"
-time="2024-06-19T10:56:02Z" level=info msg="pod-network-loss-helper-nl5mb helper pod is in Running state"
-time="2024-06-19T10:56:04Z" level=info msg="[Wait]: waiting till the completion of the helper pod"
-time="2024-06-19T10:56:04Z" level=info msg="helper pod status: Running"
+aws fis start-experiment --experiment-template-id EXT5ZByKtF4sgEL --region us-east-1
+```
+
+Output: 
+```
+{
+    "experiment": {
+        "id": "EXPpH5gti5bgNFXv1Y",
+        "experimentTemplateId": "EXT5ZByKtF4sgEL",
 ...
-time="2024-06-19T10:57:05Z" level=info msg="[Confirmation]: pod-network-loss chaos has been injected successfully"
-```
-B: Validate from network testing from a different pod using telnet tool
-
-Use below command to get ui pod IP
-
-```
-kubectl get pods -n app -o wide | grep ui
-ui-d6bddf848-br4qt                1/1     Running   0             73m   172.31.39.211   ip-172-31-47-5.ec2.internal   <none>           <none>
 ```
 
-Before chaos injection 
+During experiment, see the connection rest error triggered 
+
 ```
-telnet 172.31.39.211 8080
-Connected to 172.31.39.211
+curl -vk 172.31.38.116:8080
+*   Trying 172.31.38.116:8080...
+* Connected to 172.31.38.116 (172.31.38.116) port 8080
+> GET / HTTP/1.1
+> Host: 172.31.38.116:8080
+> User-Agent: curl/8.7.1
+> Accept: */*
+> 
+* Request completely sent off
+* Recv failure: Connection reset by peer
+* Closing connection
+curl: (56) Recv failure: Connection reset by peer
 ```
 
-During chaos injection, disconnection is expected 
+Verify the expriment is in completed status: 
 ```
-telnet 172.31.39.211 8080
+aws fis get-experiment --id EXPpH5gti5bgNFXv1Y --region us-east-1 | grep status 
+            "status": "completed",
+                    "status": "completed",
+```
 
-telnet: can't connect to remote host (172.31.39.211): Host is unreachable
-```
