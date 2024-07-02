@@ -40,74 +40,6 @@ chaos-dashboard-54c7d9d-2jfxt              1/1     Running   0     
 chaos-dns-server-66d757d748-76j9g          1/1     Running   0          54s
 ```
 
-## Chaos Mesh experiment 
-
-Chaos Mesh offers a diverse range of Kubernetes chaos experiments. The Pod Kill action, for instance, simulates pod failures, allowing you to test the resilience of your applications in the face of such disruptions.
-
-1 - Pod label can be be used to select pod target, use below command to show labels for each pod in a particular namespace 
-
-```yaml
-kubectl get pod -n app --show-labels 
-```
-
-2 - Create experiment configuration into a yaml file, with name pod-kill.yaml 
-```
-apiVersion: chaos-mesh.org/v1alpha1
-kind: PodChaos
-metadata:
-  name: pod-kill-example
-  namespace: chaos-mesh
-spec:
-  action: pod-kill
-  mode: one
-  selector:
-    namespaces:
-      - app
-    labelSelectors:
-      'app.kubernetes.io/instance': 'ui'
-```
-
-3 - Trigger pod chaos injection  
-
-Note, using kubectl to apply chaos-mesh is facing an known limit reported in github issue (https://github.com/chaos-mesh/chaos-mesh/issues/2187)
-
-Example error: 
-
-```
-Error from server (user is forbidden on namespace app): error when creating "pod-kill.yaml": admission webhook "vauth.kb.io" denied the request: user is forbidden on namespace app
-```
-
-Proposed fix: 
-```
-kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io chaos-mesh-validation-auth
-```
-
-Apply pod-kill chaos 
-```
-kubectl apply -f pod-kill.yaml
-```
-
-Step 4 - Validate Chaos experiment 
-
-Validate pod is being restarted: 
-```
-kubectl get pod -n app | grep ui
-ui-d6bddf848-br4qt                1/1     Running   0             19s
-```
-
-chaos-mesh controller pod log validation for 200 chaos experiment response code: 
-
-```
-kubectl logs -l app.kubernetes.io/component=controller-manager -n chaos-mesh
-```
-expected logs: 
-
-```
-2024-06-19T09:33:33.992Z	DEBUG	controller-runtime.webhook.webhooks	admission/http.go:96	received request	{"webhook": "/validate-chaos-mesh-org-v1alpha1-podchaos", "UID": "13dc3c65-6038-4a66-896f-b64dcf016e88", "kind": "chaos-mesh.org/v1alpha1, Kind=PodChaos", "resource": {"group":"chaos-mesh.org","version":"v1alpha1","resource":"podchaos"}}
-2024-06-19T09:33:33.992Z	INFO	PodChaos-resource	v1alpha1/zz_generated.chaosmesh.go:1715	validate create	{"name": "pod-kill-example"}
-2024-06-19T09:33:33.993Z	DEBUG	controller-runtime.webhook.webhooks	admission/http.go:143	wrote response	{"webhook": "/validate-chaos-mesh-org-v1alpha1-podchaos", "code": 200, "reason": "", "UID": "13dc3c65-6038-4a66-896f-b64dcf016e88", "allowed": true}
-```
-
 # Litmus   
 
 ## Installations 
@@ -483,5 +415,166 @@ Verify the expriment is in completed status:
 aws fis get-experiment --id EXPpH5gti5bgNFXv1Y --region us-east-1 | grep status 
             "status": "completed",
                     "status": "completed",
+```
+## Step 5 - Create FIS experiment template - Chaos-Mesh 
+
+Chaos Mesh offers a diverse range of Kubernetes chaos experiments. The container Kill action, for instance, simulates container kill, allowing you to test the resilience of your applications in the face of such disruptions.
+
+#### Step 5-1 Get application pod label and container name 
+
+Pod label can be be used to select pod target, use below command to show labels for each pod in a particular namespace 
+
+```yaml
+kubectl get pod -n app --show-labels 
+```
+
+ For example- check out pod label, container name inside pod is **checkout** 
+
+```
+checkout-778f5f98cf-56wnl         1/1     Running   0             73d   app.kuberneres.io/owner=retail-store-sample,app.kubernetes.io/component=service,app.kubernetes.io/instance=checkout,app.kubernetes.io/name=checkout,pod-template-hash=778f5f98cf
+```
+
+#### Step5-2 Create FIS experiment template 
+
+Use below command to create FIS experiment template: 
+
+```
+aws fis create-experiment-template \
+    --cli-input-json '{
+        "description": "chaos-mesh-container-kill",
+        "targets": {
+                "Cluster-Target-1": {
+                        "resourceType": "aws:eks:cluster",
+                        "resourceArns": [
+                                "arn:aws:eks:us-east-1:xxxxxx:cluster/chaos-cluster"
+                        ],
+                        "selectionMode": "ALL"
+                }
+        },
+        "actions": {
+                "chaos-mesh-container-kill": {
+                        "actionId": "aws:eks:inject-kubernetes-custom-resource",
+                        "description": "chaos-mesh-container-kill",
+                        "parameters": {
+                                "kubernetesApiVersion": "chaos-mesh.org/v1alpha1",
+                                "kubernetesKind": "PodChaos",
+                                "kubernetesNamespace": "chaos-mesh",
+                                "kubernetesSpec": "{   \"action\": \"container-kill\",   \"mode\": \"one\",   \"containerNames\": [     \"checkout\"   ],   \"selector\": {     \"namespaces\": [       \"app\"     ],     \"labelSelectors\": {       \"app.kubernetes.io/name\": \"checkout\"     }   } }",
+                                "maxDuration": "PT1M"
+                        },
+                        "targets": {
+                                "Cluster": "Cluster-Target-1"
+                        }
+                }
+        },
+        "stopConditions": [
+                {
+                        "source": "none"
+                }
+        ],
+        "roleArn": "arn:aws:iam::xxxxxx:role/fis-role",
+        "tags": {
+                "Name": "chaos-mesh-container-kill"
+        },
+        "logConfiguration": {
+                "cloudWatchLogsConfiguration": {
+                        "logGroupArn": "arn:aws:logs:us-east-1:xxxxxx:log-group:fis-chaos:*"
+                },
+                "logSchemaVersion": 2
+        },
+        "experimentOptions": {
+                "accountTargeting": "single-account",
+                "emptyTargetResolutionMode": "fail"
+        }
+}'
+```
+
+Record experiment template ID or query the experiment template ID: 
+
+```
+aws fis list-experiment-templates --region us-east-1 | grep chaos-mesh -B1
+```
+
+Expected outcome: 
+```
+ "id": "EXT3biMwNMevDYtg8",
+ "description": "chaos-mesh-container-kill",
+```
+
+Note, chaos-mesh is facing an known limit reported in github issue (https://github.com/chaos-mesh/chaos-mesh/issues/2187)
+
+#### Step 5-3 Run FIS fault injections 
+
+**Note**
+
+chaos-mesh is facing an known limit documented in github issue (https://github.com/chaos-mesh/chaos-mesh/issues/2187)
+
+Error when run chaos injection captured from chaos-mesh controller log: 
+
+```
+2024-07-01T13:58:23.946Z        DEBUG   controller-runtime.webhook.webhooks     admission/http.go:143   wrote response  {"webhook": "/validate-auth", "code": 403, "reason": "fis is forbidden on namespace app", "UID": "f05fbce2-4a23-4dd5-9d7f-78cbfa5cc574", "allowed": false}
+```
+
+Proposed fix: 
+```
+kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io chaos-mesh-validation-auth
+```
+----
+
+Verify check out pod status: 
+
+```
+kubectl get pod -n app | grep checkout  
+checkout-778f5f98cf-q92gn         1/1     Running   0             53s
+```
+
+Run experiment 
+
+```
+aws fis start-experiment --experiment-template-id EXT3biMwNMevDYtg8 --region us-east-1
+```
+
+Output: 
+```
+{
+    "experiment": {
+        "id": "EXPFUuXSsHEugGq9aS",
+        "experimentTemplateId": "EXT3biMwNMevDYtg8",
+        ...
+```
+
+Verify the experiment is in completed status:
+```
+aws fis get-experiment --id EXPFUuXSsHEugGq9aS --region us-east-1 | grep status 
+            "status": "completed",
+                    "status": "completed",
+```
+
+Check pod status, and verify the container is restarted 
+```
+kubectl get pod -n app | grep checkout 
+checkout-778f5f98cf-q92gn         1/1     Running   1 (4m8s ago)   6m4s
+```
+```
+kubectl describe pod -n app checkout-778f5f98cf-q92gn
+
+  Restart Count:  1
+  
+Events:
+  Type     Reason            Age                    From               Message
+  ----     ------            ----                   ----               -------
+  Normal   Pulled            4m41s (x2 over 6m34s)  kubelet            Container image "public.ecr.aws/aws-containers/retail-store-sample-checkout:0.7.1" already present on machine
+  Normal   Created           4m41s (x2 over 6m34s)  kubelet            Created container checkout
+  Normal   Started           4m40s (x2 over 6m33s)  kubelet            Started container checkout
+
+```
+
+# Clean up 
+
+## Uninstall Chaos 
+
+```
+helm uninstall chaos-mesh -n chaos-mesh
+helm uninstall chaos -n litmus
 ```
 
