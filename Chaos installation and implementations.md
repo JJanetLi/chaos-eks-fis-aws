@@ -1,14 +1,15 @@
 # Pre-reqs 
 
-1 - EKS cluster deployed 
-
+1 -  EKS cluster deployed 
 2 - Follow below command to create app namespace and deploy application in app namespace
 
 ```
 kubectl create ns app 
 kubectl apply -f https://github.com/JJanetLi/chaos-eks-fis-aws/blob/app/app/retail-store-sample-app.yaml -n app
 ```
+
 **Note - replace xxxxxx to your own AWS account number**
+
 # Chaos Mesh 
 
 ## Installation 
@@ -39,6 +40,7 @@ chaos-daemon-x2r4j                         1/1     Running   0  
 chaos-dashboard-54c7d9d-2jfxt              1/1     Running   0          54s
 chaos-dns-server-66d757d748-76j9g          1/1     Running   0          54s
 ```
+
 
 # Litmus   
 
@@ -85,6 +87,8 @@ Verified installation with below command and expected output
 kubectl get pods -n litmus  | grep ope
 chaos-operator-ce-5577475cf5-rbzzh          1/1     Running   0          21s
 ```
+
+
 # AWS Fault injection Service (FIS)
 
 Use FIS to inject Chaos Mesh and Litmus chaos by action - aws:eks:inject-kubernetes-custom-resource
@@ -128,6 +132,7 @@ Expected outcome:
         "Arn": "arn:aws:iam::account:role/fis-role",
         ...
 ```
+
 ## Step2 (Optional) - Create CloudWatch Log group for fault injection experiment logs
 
 #### Step 2-1: Create cloudwatch log group: 
@@ -164,17 +169,76 @@ aws iam create-policy --policy-name fis-log --policy-document file://fis-log.jso
 aws iam attach-role-policy --policy-arn arn:aws:iam::640480128198:policy/fis-log --role-name fis-role  --profile chaos
 ```
 
-## Step 3 - Grant  FIS role EKS RBAC access
+## Step 3 - Grant FIS role EKS RBAC access
 
-Create Access entry for fis-role: 
+### Step 3.1 - Grant minimal RBAC priviledge for FIS role to interact with litmus chaos and chaos-mesh api resources. 
+
+Copy below content and saved as rbac-fis-role.yaml
+
 ```
-aws eks create-access-entry --cluster-name chaos-cluster --principal-arn arn:aws:iam::xxxxxx:role/fis-role --type STANDARD --username fis  --region us-east-1
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default  #where app is running 
+  name: fis-role-litmus
+rules:
+- apiGroups: ["litmuschaos.io"]
+  resources: ["chaosengines","chaosexperiments","chaosresults"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+# This cluster role binding allows anyone in the "manager" group to read secrets in any namespace.
+kind: RoleBinding
+metadata:
+  name: fis-rolebindings-litmus
+  namespace: app
+subjects:
+- kind: Group
+  name: fis # Name is case sensitive
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: fis-role-litmus
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: chaos-mesh
+  name: fis-role-chaos-mesh
+rules:
+- apiGroups: ["chaos-mesh.org"] 
+  resources: ["*"]
+  verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+# This cluster role binding allows anyone in the "manager" group to read secrets in any namespace.
+kind: RoleBinding
+metadata:
+  name: fis-rolebindings-chaos-mesh
+  namespace: chaos-mesh
+subjects:
+- kind: Group
+  name: fis # Name is case sensitive
+  apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: fis-role-chaos-mesh
+  apiGroup: rbac.authorization.k8s.io
+```
+Run below command to create role and rolebindings 
+```
+kubectl apply -f rbac-fis-role.yaml
 ```
 
-Grant fis-role cluster admin access: 
+### Step3 -2 Create Access entry for fis-role: 
+
+Use below command to bind fis role with above RBAC permission granted: 
+
 ```
-aws eks associate-access-policy --cluster-name chaos-cluster  --principal-arn arn:aws:iam::xxxxxx:role/fis-role --access-scope type=cluster --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy --region us-east-1
+aws eks create-access-entry --cluster-name chaos-cluster --principal-arn arn:aws:iam::xxxxxx:role/fis-role --type STANDARD --kubernetes-groups fis --region us-east-1
 ```
+
 ## Step 4 - Create FIS experiment template - Litmus Chaos 
 
 Litmus chaos experiment of injecting http reset peer chaos will be pushed to application pod via AWS FIS. 
@@ -416,11 +480,12 @@ aws fis get-experiment --id EXPpH5gti5bgNFXv1Y --region us-east-1 | grep status
             "status": "completed",
                     "status": "completed",
 ```
+
 ## Step 5 - Create FIS experiment template - Chaos-Mesh 
 
 Chaos Mesh offers a diverse range of Kubernetes chaos experiments. The container Kill action, for instance, simulates container kill, allowing you to test the resilience of your applications in the face of such disruptions.
 
-#### Step 5-1 Get application pod label and container name 
+Step 5-1 Get application pod label and container name 
 
 Pod label can be be used to select pod target, use below command to show labels for each pod in a particular namespace 
 
@@ -434,7 +499,7 @@ kubectl get pod -n app --show-labels
 checkout-778f5f98cf-56wnl         1/1     Running   0             73d   app.kuberneres.io/owner=retail-store-sample,app.kubernetes.io/component=service,app.kubernetes.io/instance=checkout,app.kubernetes.io/name=checkout,pod-template-hash=778f5f98cf
 ```
 
-#### Step5-2 Create FIS experiment template 
+Step5-2 - Create FIS experiment template 
 
 Use below command to create FIS experiment template: 
 
@@ -501,12 +566,9 @@ Expected outcome:
  "description": "chaos-mesh-container-kill",
 ```
 
-Note, chaos-mesh is facing an known limit reported in github issue (https://github.com/chaos-mesh/chaos-mesh/issues/2187)
-
-#### Step 5-3 Run FIS fault injections 
+### Step 5-3 Run FIS fault injections 
 
 **Note**
-
 chaos-mesh is facing an known limit documented in github issue (https://github.com/chaos-mesh/chaos-mesh/issues/2187)
 
 Error when run chaos injection captured from chaos-mesh controller log: 
@@ -519,7 +581,6 @@ Proposed fix:
 ```
 kubectl delete validatingwebhookconfigurations.admissionregistration.k8s.io chaos-mesh-validation-auth
 ```
-----
 
 Verify check out pod status: 
 
@@ -550,7 +611,7 @@ aws fis get-experiment --id EXPFUuXSsHEugGq9aS --region us-east-1 | grep status
                     "status": "completed",
 ```
 
-Check pod status, and verify the container is restarted 
+Check pod status, and verify the container is restarted: 
 ```
 kubectl get pod -n app | grep checkout 
 checkout-778f5f98cf-q92gn         1/1     Running   1 (4m8s ago)   6m4s
@@ -569,6 +630,12 @@ Events:
 
 ```
 
+Check chaos mesh log for successful executions: 
+
+```
+kubectl logs -n chaos-mesh -l app.kubernetes.io/component=controller-manager
+```
+
 # Clean up 
 
 ## Uninstall Chaos 
@@ -577,4 +644,3 @@ Events:
 helm uninstall chaos-mesh -n chaos-mesh
 helm uninstall chaos -n litmus
 ```
-
